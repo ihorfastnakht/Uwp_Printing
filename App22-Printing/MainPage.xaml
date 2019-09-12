@@ -1,0 +1,54 @@
+﻿<Page
+    x:Class="App22_Printing.MainPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:App22_Printing"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+
+    <ScrollViewer>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition/>
+        </Grid.RowDefinitions>
+
+            <Grid Opacity="0" x:Name="Canvas"/>
+
+            <Button Grid.Row="0" 
+                x:Name="Print" Content="Print"
+                Width="100"
+                IsEnabled="True"
+                Click="Print_Click"
+                Margin="10"/>
+
+        
+        
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+
+                <Grid Grid.Column="1" Width="1000" Height="1000" Background="Red"/>
+
+                <WebView Grid.Column="1" x:Name="WebView"
+                     Visibility="Visible"
+                     VerticalAlignment="Top"/>
+               
+
+                <ItemsControl Grid.Column="0"
+                              BorderBrush="Red"
+                              BorderThickness="1"
+                              ScrollViewer.VerticalScrollBarVisibility="Visible"
+                             x:Name="Container"/>
+
+        </Grid>
+      
+
+    </Grid>
+    </ScrollViewer>
+</Page>
