@@ -32,12 +32,8 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-
-                <Grid Grid.Column="1" Width="1000" Height="1000" Background="Red"/>
-
                 <WebView Grid.Column="1" x:Name="WebView"
-                     Visibility="Visible"
-                     VerticalAlignment="Top"/>
+                         VerticalAlignment="Top"/>
                
 
                 <ItemsControl Grid.Column="0"

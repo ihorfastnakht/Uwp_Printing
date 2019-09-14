@@ -13,6 +13,8 @@ using Windows.Graphics.Printing;
 using Windows.UI.Xaml.Printing;
 using Windows.ApplicationModel.Core;
 using Windows.UI.Xaml.Shapes;
+using System.Threading;
+using Windows.UI.Xaml.Media;
 
 namespace App22_Printing
 {
@@ -60,6 +62,8 @@ namespace App22_Printing
         public event Action OnPrintCanceled;
 
         public event Action<List<FrameworkElement>> OnPreviewPagesCreated;
+
+        public event Func<PrintPageDescription, Task<IEnumerable<FrameworkElement>>> PreparePages;
 
         public double ApplicationContentMarginLeft { get; set; } = 0.03;
 
@@ -193,11 +197,6 @@ namespace App22_Printing
             { 
                 ApplyPrintSettings(printTask);
 
-                await CoreApplication.MainView.CoreWindow.Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.High, async () =>
-                {
-                    _printDocument.AddPagesComplete();
-                });
-
                 // Print Task event handler is invoked when the print job is completed.
                 printTask.Completed += async (s, args) =>
                 {
@@ -313,56 +312,77 @@ namespace App22_Printing
             _printHelperOptions = null;
         }
 
+        private SemaphoreSlim semaphore = new SemaphoreSlim(1, 1);
+
         private async void CreatePrintPreviewPages(object sender, PaginateEventArgs e)
         {
-            // Get the PrintTaskOptions
-            PrintTaskOptions printingOptions = e.PrintTaskOptions;
-
-            // Get the page description to determine how big the page is
-            PrintPageDescription pageDescription = printingOptions.GetPageDescription(0);
-
-            if (_directPrint)
+            var x = await semaphore.WaitAsync(1000);
+            if (!x) return;
+            try
             {
-                _canvasContainer.RequestedTheme = ElementTheme.Light;
-                foreach (FrameworkElement element in this._canvasContainer.Children)
+                // Get the PrintTaskOptions
+                PrintTaskOptions printingOptions = e.PrintTaskOptions;
+
+                // Get the page description to determine how big the page is
+                PrintPageDescription pageDescription = printingOptions.GetPageDescription(0);
+
+                if (_directPrint)
                 {
-                    _printPreviewPages.Add(element);
+                    _canvasContainer.RequestedTheme = ElementTheme.Light;
+                    foreach (FrameworkElement element in this._canvasContainer.Children)
+                    {
+                        _printPreviewPages.Add(element);
+                    }
                 }
+                else
+                {
+                    // Attach the canvas
+                    if (!_canvasContainer.Children.Contains(_printCanvas))
+                    {
+                        _canvasContainer.Children.Add(_printCanvas);
+                    }
+
+                    _canvasContainer.RequestedTheme = ElementTheme.Light;
+
+                    // Clear the cache of preview pages
+                    await ClearPageCache();
+
+                    // Clear the print canvas of preview pages
+                    _printCanvas.Children.Clear();
+                    var pages = new List<FrameworkElement>();
+
+                    await DispatcherHelper.ExecuteOnUIThreadAsync(async () =>
+                    {
+                        var res = await PreparePages?.Invoke(pageDescription);
+                        pages = res?.ToList();
+                        if (pages == null)
+                        {
+                            throw new InvalidOperationException();
+                        }
+                    });
+
+                    var printPageTasks = new List<Task>();
+                    foreach (var element in pages)
+                    {
+                        printPageTasks.Add(AddOnePrintPreviewPage(element, pageDescription));
+                    }
+
+                    await Task.WhenAll(printPageTasks);
+                }
+
+                OnPreviewPagesCreated?.Invoke(_printPreviewPages);
+
+                PrintDocument printDoc = (PrintDocument)sender;
+
+                // Report the number of preview pages created
+                _printCanvas.UpdateLayout();
+                printDoc.SetPreviewPageCount(_printPreviewPages.Count, PreviewPageCountType.Intermediate);
+                printDoc.SetPreviewPage(1, _printPreviewPages[0]);
             }
-            else
+            finally
             {
-                // Attach the canvas
-                if (!_canvasContainer.Children.Contains(_printCanvas))
-                {
-                    _canvasContainer.Children.Add(_printCanvas);
-                }
-
-                _canvasContainer.RequestedTheme = ElementTheme.Light;
-
-                // Clear the cache of preview pages
-                await ClearPageCache();
-
-                // Clear the print canvas of preview pages
-                _printCanvas.Children.Clear();
-
-                var printPageTasks = new List<Task>();
-                foreach (var element in _elementsToPrint)
-                {
-                    printPageTasks.Add(AddOnePrintPreviewPage(element, pageDescription));
-                }
-
-                await Task.WhenAll(printPageTasks);
+                semaphore.Release();
             }
-
-            OnPreviewPagesCreated?.Invoke(_printPreviewPages);
-
-            PrintDocument printDoc = (PrintDocument)sender;
-
-            // Report the number of preview pages created
-            //_printCanvas.InvalidateMeasure();
-            _printCanvas.UpdateLayout();
-            printDoc.SetPreviewPageCount(_printPreviewPages.Count, PreviewPageCountType.Intermediate);
-            printDoc.SetPreviewPage(1, _printPreviewPages[0]);
         }
 
         private void GetPrintPreviewPage(object sender, GetPreviewPageEventArgs e)
@@ -384,7 +404,6 @@ namespace App22_Printing
                 _printDocument.AddPage(_printPreviewPages[i]);
             }
             PrintDocument printDoc = (PrintDocument)sender;
-
             // Indicate that all of the print pages have been provided
             printDoc.AddPagesComplete();
         }
@@ -393,7 +412,7 @@ namespace App22_Printing
         {
             var page = new Page();
 
-            // Save state
+            //Save state
             if (!_stateBags.ContainsKey(element))
             {
                 var stateBag = new CustPrintHelperStateBag();
@@ -442,6 +461,8 @@ namespace App22_Printing
 
                     // Add the page to the page preview collection
                     _printPreviewPages.Add(page);
+
+                    _printDocument.SetPreviewPage(1, _printPreviewPages[0]);
                 }, Windows.UI.Core.CoreDispatcherPriority.High);
         }
 
@@ -496,6 +517,7 @@ namespace App22_Printing
         private async void WebView_LoadCompleted(object sender, NavigationEventArgs e)
         {
             _printHelper = new CustPrintHelper(Canvas);
+            _printHelper.PreparePages += _printHelper_PreparePages;
             _printHelper.OnPreviewPagesCreated += _printHelper_OnPreviewPagesCreated;
             _printHelper.OnPrintCanceled += PrintHelper_OnPrintCanceled;
             _printHelper.OnPrintFailed += PrintHelper_OnPrintFailed;
@@ -507,10 +529,18 @@ namespace App22_Printing
 
             foreach (var s in pages)
             {
-                _printHelper.AddFrameworkElementToPrint(s);
+                //_printHelper.AddFrameworkElementToPrint(s);
             }
 
             await _printHelper.ShowPrintUIAsync("Windows Community Toolkit Sample App");
+        }
+
+        private async Task<IEnumerable<FrameworkElement>> _printHelper_PreparePages(PrintPageDescription arg)
+        {
+            var pages = await GetWebPages(WebView, arg.PageSize);
+            //var Ui_pages = await GetWebPages(WebView, arg.PageSize);
+            //Container.ItemsSource = Ui_pages;
+            return pages;
         }
 
         private async void PopulateItemsControl(WebView webView)
@@ -558,94 +588,108 @@ namespace App22_Printing
             }
         }
 
-        async Task<List<Rectangle>> GetWebPages(WebView webView, Size page)
+        async Task<List<FrameworkElement>> GetWebPages(WebView webView, Size page)
         {
-            // ask the content its width
-            var _WidthString = await webView.InvokeScriptAsync("eval",
-                new[] { "document.body.scrollWidth.toString()" });
-            int _ContentWidth;
-            if (!int.TryParse(_WidthString, out _ContentWidth))
-                throw new Exception(string.Format("failure/width:{0}", _WidthString));
-            webView.Width = _ContentWidth;
-
-            // ask the content its height
-            var _HeightString = await webView.InvokeScriptAsync("eval",
-                new[] { "document.body.scrollHeight.toString()" });
-            int _ContentHeight;
-            if (!int.TryParse(_HeightString, out _ContentHeight))
-                throw new Exception(string.Format("failure/height:{0}", _HeightString));
-            webView.Height = _ContentHeight;
-
-            // how many pages will there be?
-            var _Scale = page.Width / _ContentWidth;
-            var _ScaledHeight = (_ContentHeight * _Scale);
-            var _PageCount = (int) Math.Round((double)_ScaledHeight / page.Height, MidpointRounding.AwayFromZero);
-            //PageCount = _PageCount + ((_PageCount > (int)_PageCount) ? 1 : 0);
-
-            // create the pages
-            var _Pages = new List<Windows.UI.Xaml.Shapes.Rectangle>();
-            for (int i = 0; i < (int)_PageCount; i++)
+            var width_str = await webView.InvokeScriptAsync("eval", new[] { "document.body.scrollWidth.toString()" });
+            if (!int.TryParse(width_str, out int width))
             {
-                var _TranslateY = -page.Height * i;
-                var _Page = new Windows.UI.Xaml.Shapes.Rectangle
+                throw new Exception(string.Format("failure / width:{0}", width_str));
+            }
+
+            webView.Width = width;
+
+            var height_str = await webView.InvokeScriptAsync("eval", new[] { "document.body.scrollHeight.toString()" });
+            if (!int.TryParse(height_str, out int height))
+            {
+                throw new Exception(string.Format("failure / height:{0}", height_str));
+            }
+
+            webView.Height = height;
+
+            var scale = page.Width / width;
+            var scale_height = (height * scale);
+            var pages_count = (int) Math.Round(scale_height / page.Height, MidpointRounding.AwayFromZero);
+
+            var pages = new List<FrameworkElement>();
+
+            for (int i = 0; i < pages_count; i++)
+            {
+                var pageLayoutGrid = new Grid();
+
+                pageLayoutGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                pageLayoutGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                pageLayoutGrid.VerticalAlignment = VerticalAlignment.Top;
+
+                var translate_Y = -page.Height * i;
+                var rectangle = new Rectangle
                 {
                     Height = page.Height,
                     Width = page.Width,
-                    Margin = new Windows.UI.Xaml.Thickness(5),
-                    Tag = new Windows.UI.Xaml.Media.TranslateTransform { Y = _TranslateY },
+                    Margin = new Thickness(5),
+                    Tag = new TranslateTransform { Y = translate_Y },
                 };
-                _Page.Loaded += async (s, e) =>
+
+                await DispatcherHelper.ExecuteOnUIThreadAsync(async () =>
                 {
-                     await DispatcherHelper.ExecuteOnUIThreadAsync(async() =>
-                    {
-                        var _Rectangle = s as Windows.UI.Xaml.Shapes.Rectangle;
-                        var _Brush = await GetWebViewBrush(webView);
-                        _Brush.Stretch = Windows.UI.Xaml.Media.Stretch.UniformToFill;
-                        _Brush.AlignmentY = Windows.UI.Xaml.Media.AlignmentY.Top;
-                        _Brush.Transform = _Rectangle.Tag as Windows.UI.Xaml.Media.TranslateTransform;
-                        _Rectangle.Fill = _Brush;
-                    });
-                };
-                _Pages.Add(_Page);
+                    var brush = await GetWebviewBrushAsync(webView);
+                    brush.Stretch = Stretch.UniformToFill;
+                    brush.AlignmentY = AlignmentY.Top;
+                    brush.Transform = rectangle.Tag as TranslateTransform;
+                    rectangle.Fill = brush;
+                });
+
+                
+                var footer = new TextBlock();
+                footer.Text = $"page {i + 1} of {pages_count}";
+                footer.FontSize = 10;
+                footer.Margin = new Thickness(5);
+                footer.HorizontalAlignment = HorizontalAlignment.Right;
+                footer.VerticalAlignment = VerticalAlignment.Bottom;
+
+                pageLayoutGrid.Children.Add(rectangle);
+                Grid.SetRow(rectangle, 0);
+
+                pageLayoutGrid.Children.Add(footer);
+                Grid.SetRow(footer, 1);
+
+                pages.Add(pageLayoutGrid);
             }
-            return _Pages;
+            return pages;
         }
 
-        async Task<WebViewBrush> GetWebViewBrush(WebView webView)
+        private async Task<WebViewBrush> GetWebviewBrushAsync(WebView webView)
         {
-            // resize width to content
-            var _OriginalWidth = webView.Width;
-            var _WidthString = await webView.InvokeScriptAsync("eval",
-                new[] { "document.body.scrollWidth.toString()" });
-            int _ContentWidth;
-            if (!int.TryParse(_WidthString, out _ContentWidth))
-                throw new Exception(string.Format("failure/width:{0}", _WidthString));
-            webView.Width = _ContentWidth;
+            var original_width = webView.Width;
+            var width_str = await webView.InvokeScriptAsync("eval", new[] { "document.body.scrollWidth.toString()" });
+            if (!int.TryParse(width_str, out int width))
+            {
+                throw new Exception(string.Format("failure / width:{0}", width_str));
+            }
+            webView.Width = width;
 
-            // resize height to content
-            var _OriginalHeight = webView.Height;
-            var _HeightString = await webView.InvokeScriptAsync("eval",
-                new[] { "document.body.scrollHeight.toString()" });
-            int _ContentHeight;
-            if (!int.TryParse(_HeightString, out _ContentHeight))
-                throw new Exception(string.Format("failure/height:{0}", _HeightString));
-            webView.Height = _ContentHeight;
+            var original_height = webView.Height;
+            var height_str = await webView.InvokeScriptAsync("eval", new[] { "document.body.scrollHeight.toString()" });
+            if (!int.TryParse(height_str, out int height))
+            {
+                throw new Exception(string.Format("failure/height:{0}", height_str));
+            }
+            webView.Height = height;
 
-            // create brush
-            var _OriginalVisibilty = webView.Visibility;
-            webView.Visibility = Windows.UI.Xaml.Visibility.Visible;
-            var _Brush = new WebViewBrush
+            var original_visibility = webView.Visibility;
+            webView.Visibility = Visibility.Visible;
+            var brush = new WebViewBrush
             {
                 SourceName = webView.Name,
-                Stretch = Windows.UI.Xaml.Media.Stretch.Uniform
+                Stretch = Stretch.Uniform
             };
-            _Brush.Redraw();
+
+            brush.Redraw();
             await Task.Delay(10);
-            // reset, return
-            webView.Width = _OriginalWidth;
-            webView.Height = _OriginalHeight;
-            webView.Visibility = _OriginalVisibilty;
-            return _Brush;
+            
+            webView.Width = original_width;
+            webView.Height = original_height;
+            webView.Visibility = original_visibility;
+            return brush;
         }
     }
 }
