@@ -615,23 +615,24 @@ namespace App22_Printing
             for (int i = 0; i < pages_count; i++)
             {
                 var pageLayoutGrid = new Grid();
-
+                pageLayoutGrid.Margin = new Thickness(4);
                 pageLayoutGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
                 pageLayoutGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 pageLayoutGrid.VerticalAlignment = VerticalAlignment.Top;
+                pageLayoutGrid.HorizontalAlignment = HorizontalAlignment.Center;
 
                 var translate_Y = -page.Height * i;
                 var rectangle = new Rectangle
                 {
-                    Height = page.Height,
-                    Width = page.Width,
-                    Margin = new Thickness(5),
+                    Height = page.Height - 2,
+                    Width = page.Width - 4,
+                    Margin = new Thickness(4, 2, 4, 2),
                     Tag = new TranslateTransform { Y = translate_Y },
                 };
 
                 await DispatcherHelper.ExecuteOnUIThreadAsync(async () =>
                 {
-                    var brush = await GetWebviewBrushAsync(webView);
+                    var brush = await GetWebviewBrushAsync(webView, page);
                     brush.Stretch = Stretch.UniformToFill;
                     brush.AlignmentY = AlignmentY.Top;
                     brush.Transform = rectangle.Tag as TranslateTransform;
@@ -657,7 +658,7 @@ namespace App22_Printing
             return pages;
         }
 
-        private async Task<WebViewBrush> GetWebviewBrushAsync(WebView webView)
+        private async Task<WebViewBrush> GetWebviewBrushAsync(WebView webView, Size size)
         {
             var original_width = webView.Width;
             var width_str = await webView.InvokeScriptAsync("eval", new[] { "document.body.scrollWidth.toString()" });
@@ -665,7 +666,7 @@ namespace App22_Printing
             {
                 throw new Exception(string.Format("failure / width:{0}", width_str));
             }
-            webView.Width = width;
+            webView.Width = size.Width;
 
             var original_height = webView.Height;
             var height_str = await webView.InvokeScriptAsync("eval", new[] { "document.body.scrollHeight.toString()" });
@@ -679,8 +680,10 @@ namespace App22_Printing
             webView.Visibility = Visibility.Visible;
             var brush = new WebViewBrush
             {
+                AlignmentX = AlignmentX.Center,
+                AlignmentY = AlignmentY.Top,
                 SourceName = webView.Name,
-                Stretch = Stretch.Uniform
+                Stretch = Stretch.UniformToFill
             };
 
             brush.Redraw();
